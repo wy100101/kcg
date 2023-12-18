@@ -76,8 +76,9 @@ func (c *cluster) Values() map[string]interface{} {
 	for k, v := range c.StaticValues {
 		vs[k] = v
 	}
-	t := template.New("dynamic_values")
+
 	for k, v := range c.DynamicValues {
+		t := template.New(fmt.Sprintf("dynamic_values_%s", k))
 		t, err := t.Parse(v)
 		if err != nil {
 			log.Debug("(c.Values) error parsing dynamic_values: ", err)
