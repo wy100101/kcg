@@ -1,2 +1,5 @@
 # kcg
-kubernetes config generator
+Kubernetes Configuration Generator
+
+# Overview
+A tool for generating Kubernetes configuration files

@@ -1,0 +1,5 @@
+- id: kcg
+  name: kcg
+  language: golang
+  entry: kcg
+  pass_filenames: false
