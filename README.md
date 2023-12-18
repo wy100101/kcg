@@ -1,0 +1,2 @@
+# kcg
+kubernetes config generator
