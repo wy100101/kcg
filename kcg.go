@@ -67,7 +67,6 @@ type cluster struct {
 }
 
 func (c *cluster) Values() map[string]interface{} {
-	var sb strings.Builder
 	vs := make(map[string]interface{})
 	vs["platform"] = c.Platform
 	vs["region"] = c.Region
@@ -79,6 +78,7 @@ func (c *cluster) Values() map[string]interface{} {
 
 	for k, v := range c.DynamicValues {
 		t := template.New(fmt.Sprintf("dynamic_values_%s", k))
+		sb := strings.Builder{}
 		t, err := t.Parse(v)
 		if err != nil {
 			log.Debug("(c.Values) error parsing dynamic_values: ", err)
