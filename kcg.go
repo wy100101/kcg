@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -147,8 +148,10 @@ func loadConfig(cfp string) (*config, error) {
 	return &c, err
 }
 
+// expandTemplate to a buffer and write to file if not empty
 func expandTemplate(templateFilePath, outputFilePath, leftDelim, rightDelim string, values map[string]interface{}) error {
-	tfd, err := ioutil.ReadFile(templateFilePath)
+	var buf bytes.Buffer
+	tfd, err := os.ReadFile(templateFilePath)
 	if err != nil {
 		return err
 	}
@@ -163,7 +166,17 @@ func expandTemplate(templateFilePath, outputFilePath, leftDelim, rightDelim stri
 	if err != nil {
 		return err
 	}
-	return t.Execute(of, values)
+	err = t.Execute(&buf, values)
+	if err != nil {
+		return err
+	}
+	if len(buf.String()) > 0 {
+		_, err = of.Write(buf.Bytes())
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func processSource(sourceDir, destDir, leftDelim, rightDelim string, values map[string]interface{}) error {
@@ -249,7 +262,7 @@ func processCluster(c cluster, cfg *config, wg *sync.WaitGroup) {
 	}
 	kfy = []byte(fmt.Sprintf("---\n%s", kfy))
 	kfp := filepath.Join(cd, "kustomization.yaml")
-	err = ioutil.WriteFile(kfp, kfy, 0666)
+	err = os.WriteFile(kfp, kfy, 0666)
 	if err != nil {
 		panic(err)
 	}
