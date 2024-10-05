@@ -1,0 +1,7 @@
+apiVersion: scheduling.k8s.io/v1
+description: Used for platform critical services
+kind: PriorityClass
+metadata:
+  name: platform-cluster-critical
+preemptionPolicy: PreemptLowerPriority
+value: 900000000

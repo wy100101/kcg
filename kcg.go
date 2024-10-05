@@ -3,9 +3,9 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -23,12 +23,13 @@ var (
 )
 
 type config struct {
-	BaseDir     string                            `yaml:"base_dir"`
-	LeftDelim   string                            `yaml:"left_delim"`
-	RightDelim  string                            `yaml:"right_delim"`
-	Clusters    []cluster                         `yaml:"clusters"`
-	SourceBases map[string]map[string]string      `yaml:"source_bases,omitempty"`
-	ValuesBases map[string]map[string]interface{} `yaml:"values_bases,omitempty"`
+	BaseDir           string                            `yaml:"base_dir"`
+	LeftDelim         string                            `yaml:"left_delim"`
+	RightDelim        string                            `yaml:"right_delim"`
+	Clusters          []cluster                         `yaml:"clusters"`
+	MultiStageEnabled bool                              `yaml:"multi_stage_enabled"`
+	SourceBases       map[string]map[string]string      `yaml:"source_bases,omitempty"`
+	ValuesBases       map[string]map[string]interface{} `yaml:"values_bases,omitempty"`
 }
 
 func (c *config) Validate() error {
@@ -50,11 +51,43 @@ func (c *config) Validate() error {
 	return nil
 }
 
-type kustomizeFile struct {
+type dependsOn struct {
+	Name string `yaml:"name"`
+}
+type sourceRef struct {
+	Kind string `yaml:"kind"`
+	Name string `yaml:"name"`
+}
+
+type kustomizationSpec struct {
+	Interval  string      `yaml:"interval"`
+	Force     bool        `yaml:"force"`
+	Prune     bool        `yaml:"prune"`
+	Path      string      `yaml:"path"`
+	SourceRef sourceRef   `yaml:"sourceRef"`
+	DependsOn []dependsOn `yaml:"dependsOn,omitempty"`
+}
+
+type kustomizationMetadata struct {
+	Name      string `yaml:"name"`
+	Namespace string `yaml:"namespace"`
+}
+
+// kustomization source for flux2 source controller
+type kustomizationSource struct {
+	APIVersion string                `yaml:"apiVersion"`
+	Kind       string                `yaml:"kind"`
+	Metadata   kustomizationMetadata `yaml:"metadata"`
+	Spec       kustomizationSpec     `yaml:"spec"`
+}
+
+// / kustomization config for kustomize
+type kustomizationConfig struct {
 	APIVersion        string            `yaml:"apiVersion"`
 	Kind              string            `yaml:"kind"`
 	CommonAnnotations map[string]string `yaml:"commonAnnotations"`
-	Bases             []string          `yaml:"bases"`
+	Bases             []string          `yaml:"bases,omitempty"`
+	Resources         []string          `yaml:"resources,omitempty"`
 }
 
 type cluster struct {
@@ -119,6 +152,14 @@ func isFile(path string) (bool, error) {
 	return i.Mode().IsRegular(), nil
 }
 
+func isDir(path string) (bool, error) {
+	i, err := os.Stat(path)
+	if err != nil {
+		return false, err
+	}
+	return i.IsDir(), nil
+}
+
 func cleanDir(dir string) error {
 	d, err := os.Open(dir)
 	if err != nil {
@@ -140,7 +181,7 @@ func cleanDir(dir string) error {
 
 func loadConfig(cfp string) (*config, error) {
 	c := config{}
-	cfb, err := ioutil.ReadFile(cfp)
+	cfb, err := os.ReadFile(cfp)
 	if err != nil {
 		return &c, err
 	}
@@ -179,38 +220,168 @@ func expandTemplate(templateFilePath, outputFilePath, leftDelim, rightDelim stri
 	return nil
 }
 
-func processSource(sourceDir, destDir, leftDelim, rightDelim string, values map[string]interface{}) error {
-	log.Debug("(ProcessSource)", " sourceDir: ", sourceDir, " destDir: ", destDir)
-	skfp := filepath.Join(sourceDir, "kustomization.yaml")
-	skfe, err := isFile(skfp)
+func generateKustomizeBases(dir string) ([]string, error) {
+	bases := []string{}
+	d, err := os.Open(dir)
+	if err != nil {
+		return []string{}, err
+	}
+	defer d.Close()
+	entries, err := d.Readdirnames(-1)
+	if err != nil {
+		return []string{}, err
+	}
+	for _, entry := range entries {
+		dt, err := isDir(filepath.Join(dir, entry))
+		if err != nil {
+			return []string{}, err
+		}
+		if dt {
+			ft, err := isFile(filepath.Join(dir, entry, "kustomization.yaml"))
+			if err != nil {
+				return []string{}, err
+			}
+			if ft {
+				bases = append(bases, entry)
+			}
+		}
+	}
+	sort.Strings(bases)
+
+	return bases, nil
+}
+
+func createKustomizationSourceFile(kustomizeDir, destDir string, dependencies []dependsOn) error {
+	stage := filepath.Base(kustomizeDir)
+	ks := kustomizationSource{
+		Kind:       "Kustomization",
+		APIVersion: "kustommize.toolkit.fluxcd.io/v1",
+		Metadata: kustomizationMetadata{
+			Name:      stage,
+			Namespace: "flux-system",
+		},
+		Spec: kustomizationSpec{
+			Interval: "1m",
+			Path:     fmt.Sprintf("./%s", kustomizeDir),
+			Prune:    true,
+			Force:    false,
+			SourceRef: sourceRef{
+				Kind: "GitRepository",
+				Name: "flux-system",
+			},
+		},
+	}
+	if len(dependencies) > 0 {
+		ks.Spec.DependsOn = dependencies
+	}
+	ksy, err := yaml.Marshal(&ks)
 	if err != nil {
 		return err
 	}
-	if !skfe {
-		return fmt.Errorf("%s exists but is not a regular file", skfp)
-	}
-	err = os.MkdirAll(destDir, 0777)
+	ksy = []byte(fmt.Sprintf("---\n%s", ksy))
+	ksfp := filepath.Join(destDir, fmt.Sprintf("%s.ks.yaml", stage))
+	err = os.WriteFile(ksfp, ksy, 0666)
 	if err != nil {
-		return fmt.Errorf("Failed to create directory %s (%s)", destDir, err)
+		return err
 	}
-	err = cleanDir(destDir)
+	return nil
+}
+
+func createkustomizationConfigFile(kustomizeBaseDir string, cluster cluster, generateBases bool, resources []string) error {
+	kf := kustomizationConfig{
+		Kind:       "Kustomization",
+		APIVersion: "kustomize.config.k8s.io/v1beta1",
+		CommonAnnotations: map[string]string{
+			"platform":    cluster.Platform,
+			"region":      cluster.Region,
+			"environment": cluster.Env,
+			"cluster":     cluster.Cluster,
+		},
+		Bases:     nil,
+		Resources: nil,
+	}
+	if generateBases {
+		bases, err := generateKustomizeBases(kustomizeBaseDir)
+		if err != nil {
+			return err
+		}
+		kf.Bases = bases
+	}
+	if len(resources) > 0 {
+		kf.Resources = resources
+	}
+	kfy, err := yaml.Marshal(&kf)
 	if err != nil {
-		panic(err)
+		return err
+	}
+	kfy = []byte(fmt.Sprintf("---\n%s", kfy))
+	kfp := filepath.Join(kustomizeBaseDir, "kustomization.yaml")
+	err = os.WriteFile(kfp, kfy, 0666)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func processSource(sourceDir, destDir, leftDelim, rightDelim string, values map[string]interface{}, multiStageEnabled, topLevel bool) error {
+	log.Debug("(ProcessSource)", " sourceDir: ", sourceDir, " destDir: ", destDir, " multiStageEnabled ", multiStageEnabled, " topLevel ", topLevel)
+	// the top level destination directory won't be correct for multistage at the top level skip create
+	if !(topLevel && multiStageEnabled) {
+		skfp := filepath.Join(sourceDir, "kustomization.yaml")
+		skfe, err := isFile(skfp)
+		if err != nil {
+			return err
+		}
+		if !skfe {
+			return fmt.Errorf("%s exists but is not a regular file", skfp)
+		}
+		err = os.MkdirAll(destDir, 0777)
+		if err != nil {
+			return fmt.Errorf("Failed to create directory %s (%s)", destDir, err)
+		}
+		err = cleanDir(destDir)
+		if err != nil {
+			panic(err)
+		}
 	}
 	ses, err := os.ReadDir(sourceDir)
 	if err != nil {
 		return err
 	}
+	mdd := destDir // default modified destination directory is destDir
+	ddb := filepath.Base(destDir)
+	ddd := filepath.Dir(destDir)
+	sd := "01" // default stage for top level resources
+	if topLevel && multiStageEnabled {
+		// update destination dir to be /cluster-dir/01/source if top level
+		mdd = filepath.Join(ddd, sd, ddb)
+	}
 	for _, se := range ses {
 		if se.IsDir() {
+			if topLevel && multiStageEnabled {
+				// if top level and the directory is a number update the destination for multistage
+				matched, err := regexp.MatchString(`^\d\d$`, se.Name())
+				if err != nil {
+					return err
+				}
+				// if the source entry is a number, then use the
+				if matched {
+					sd = se.Name()
+				}
+				mdd = filepath.Join(ddd, sd, ddb)
+			}
 			// if source entry is a directory call processSource on it
-			err = processSource(filepath.Join(sourceDir, se.Name()), filepath.Join(destDir, se.Name()), leftDelim, rightDelim, values)
+			err = processSource(filepath.Join(sourceDir, se.Name()), mdd, leftDelim, rightDelim, values, multiStageEnabled, false)
 			if err != nil {
 				return err
 			}
 		} else {
 			// process the file like a template
-			err = expandTemplate(filepath.Join(sourceDir, se.Name()), filepath.Join(destDir, se.Name()), leftDelim, rightDelim, values)
+			err = os.MkdirAll(mdd, 0777)
+			if err != nil {
+				return err
+			}
+			err = expandTemplate(filepath.Join(sourceDir, se.Name()), filepath.Join(mdd, se.Name()), leftDelim, rightDelim, values)
 			if err != nil {
 				return err
 			}
@@ -224,7 +395,6 @@ func processCluster(c cluster, cfg *config, wg *sync.WaitGroup) {
 	defer wg.Done()
 	v := c.Values()
 	v["clusters"] = cfg.Clusters
-	kbs := []string{}
 	cd := filepath.Join(cfg.BaseDir, c.Platform, c.Region, c.Env, c.Cluster)
 	err := os.MkdirAll(cd, 0777)
 	if err != nil {
@@ -235,37 +405,69 @@ func processCluster(c cluster, cfg *config, wg *sync.WaitGroup) {
 	for d, s := range c.Sources {
 		v["source_key"] = d
 		v["source_path"] = s
-		kbs = append(kbs, d)
 
-		err = processSource(filepath.Join(cfg.BaseDir, s), filepath.Join(cd, d), cfg.LeftDelim, cfg.RightDelim, v)
+		err = processSource(filepath.Join(cfg.BaseDir, s), filepath.Join(cd, d), cfg.LeftDelim, cfg.RightDelim, v, cfg.MultiStageEnabled, true)
 		if err != nil {
 			panic(err)
 		}
 	}
 
-	sort.Strings(kbs)
+	if cfg.MultiStageEnabled {
+		cdes, err := os.ReadDir(cd)
+		if err != nil {
+			panic(err)
+		}
+		// create kustomization.yaml for each directory and corresponding ks
+		stages := []string{}
+		for _, cde := range cdes {
+			if cde.IsDir() {
+				matched, err := regexp.MatchString(`^\d\d$`, cde.Name())
+				if err != nil {
+					panic(err)
+				}
+				if matched {
+					stages = append(stages, cde.Name())
+					err = createkustomizationConfigFile(filepath.Join(cd, cde.Name()), c, true, nil)
+					if err != nil {
+						panic(err)
+					}
+				}
+			}
+		}
+		sort.Strings(stages)
+		ds := ""
+		sksfs := []string{}
+		for _, s := range stages {
+			err = createkustomizationConfigFile(filepath.Join(cd, s), c, true, nil)
+			if err != nil {
+				panic(err)
+			}
+			if len(ds) > 0 {
+				err = createKustomizationSourceFile(filepath.Join(cd, s), cd, []dependsOn{{Name: ds}})
+			} else {
+				err = createKustomizationSourceFile(filepath.Join(cd, s), cd, nil)
+			}
+			if err != nil {
+				panic(err)
+			}
+			sksfs = append(sksfs, fmt.Sprintf("%s.ks.yaml", s))
+			ds = filepath.Join(cd, s)
+			ds = s // next ks should depend on this one
+		}
+		err = createkustomizationConfigFile(cd, c, false, sksfs)
+		if err != nil {
+			panic(err)
+		}
+	} else {
+		err = createkustomizationConfigFile(cd, c, true, nil)
+		if err != nil {
+			panic(err)
+		}
+	}
+}
 
-	kf := kustomizeFile{
-		Kind:       "Kustomization",
-		APIVersion: "kustomize.config.k8s.io/v1beta1",
-		CommonAnnotations: map[string]string{
-			"platform":    c.Platform,
-			"region":      c.Region,
-			"environment": c.Env,
-			"cluster":     c.Cluster,
-		},
-		Bases: kbs,
-	}
-	kfy, err := yaml.Marshal(&kf)
-	if err != nil {
-		panic(err)
-	}
-	kfy = []byte(fmt.Sprintf("---\n%s", kfy))
-	kfp := filepath.Join(cd, "kustomization.yaml")
-	err = os.WriteFile(kfp, kfy, 0666)
-	if err != nil {
-		panic(err)
-	}
+func cloneGitSource(src_url string) (git_clone string, err error) {
+	return src_url, nil
 }
 
 func main() {

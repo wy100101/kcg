@@ -1,0 +1,36 @@
+---
+# base working dir, used in path construction
+multi_stage_enabled: false
+base_dir: .
+left_delim: '[[['
+right_delim: ']]]'
+# where to create sources sets to be used by clusters
+source_bases:
+  shared: &sources_shared
+    global: sources/global
+  shared-cloud-01: &sources_cloud_01
+    << : *sources_shared
+    external-secrets: sources/external-secrets
+# var values for clusters that don't override them
+values_bases:
+  static_globals: &static_values_global
+    prometheus_mem_requests: 30Gi
+    prometheus_mem_limits: 60Gi
+    base_domain: example.com
+    project_id: my-project-111
+  static_cloud-01: &static_values_cloud_01
+    << : *static_values_global
+    base_domain: example.io
+clusters:
+- platform: cloud-01
+  env: dev
+  region: us-central1
+  cluster: dev-us-central1-private-a
+  sources:
+    << : *sources_cloud_01
+  dynamic_values:
+    cluster_domain: '{{ .cluster }}.{{ .region }}.{{ .env }}.{{ .platform }}.{{ .base_domain }}'
+  static_values:
+    << : *static_values_cloud_01
+    prometheus_mem_requests: 8Gi
+    prometheus_mem_limits: 20Gi
