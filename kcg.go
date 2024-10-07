@@ -28,6 +28,7 @@ type config struct {
 	RightDelim        string                            `yaml:"right_delim"`
 	Clusters          []cluster                         `yaml:"clusters"`
 	MultiStageEnabled bool                              `yaml:"multi_stage_enabled"`
+	DefaultStage      string                            `yaml:"default_stage,omitempty"`
 	SourceBases       map[string]map[string]string      `yaml:"source_bases,omitempty"`
 	ValuesBases       map[string]map[string]interface{} `yaml:"values_bases,omitempty"`
 }
@@ -352,7 +353,7 @@ func processSource(sourceDir, destDir, leftDelim, rightDelim string, values map[
 	mdd := destDir // default modified destination directory is destDir
 	ddb := filepath.Base(destDir)
 	ddd := filepath.Dir(destDir)
-	sd := "01" // default stage for top level resources
+	sd := "10" // default stage for top level resources
 	if topLevel && multiStageEnabled {
 		// update destination dir to be /cluster-dir/01/source if top level
 		mdd = filepath.Join(ddd, sd, ddb)
