@@ -257,7 +257,7 @@ func createKustomizationSourceFile(kustomizeDir, destDir string, dependencies []
 	stage := filepath.Base(kustomizeDir)
 	ks := kustomizationSource{
 		Kind:       "Kustomization",
-		APIVersion: "kustommize.toolkit.fluxcd.io/v1",
+		APIVersion: "kustomize.toolkit.fluxcd.io/v1",
 		Metadata: kustomizationMetadata{
 			Name:      stage,
 			Namespace: "flux-system",
