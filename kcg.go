@@ -91,13 +91,14 @@ type kustomizationConfig struct {
 }
 
 type cluster struct {
-	Platform      string                 `yaml:"platform"`
-	Region        string                 `yaml:"region"`
-	Env           string                 `yaml:"env"`
-	Cluster       string                 `yaml:"cluster"`
-	Sources       map[string]string      `yaml:"sources"`
-	StaticValues  map[string]interface{} `yaml:"static_values,omitempty"`
-	DynamicValues map[string]string      `yaml:"dynamic_values,omitempty"`
+	Platform          string                 `yaml:"platform"`
+	Region            string                 `yaml:"region"`
+	Env               string                 `yaml:"env"`
+	Cluster           string                 `yaml:"cluster"`
+	Sources           map[string]string      `yaml:"sources"`
+	StaticValues      map[string]interface{} `yaml:"static_values,omitempty"`
+	DynamicValues     map[string]string      `yaml:"dynamic_values,omitempty"`
+	MultiStageEnabled *bool                  `yaml:"multi_stage_enabled,omitempty"` // use a pointer to allow testing if unset
 }
 
 func (c *cluster) Values() map[string]interface{} {
@@ -393,6 +394,11 @@ func processSource(sourceDir, destDir, leftDelim, rightDelim string, values map[
 func processCluster(c cluster, cfg *config, wg *sync.WaitGroup) {
 	log.Debug("Processing cluster:", c.Cluster)
 	defer wg.Done()
+	mse := cfg.MultiStageEnabled
+	if c.MultiStageEnabled != nil {
+		mse = *c.MultiStageEnabled
+	}
+
 	v := c.Values()
 	v["clusters"] = cfg.Clusters
 	cd := filepath.Join(cfg.BaseDir, c.Platform, c.Region, c.Env, c.Cluster)
@@ -406,13 +412,13 @@ func processCluster(c cluster, cfg *config, wg *sync.WaitGroup) {
 		v["source_key"] = d
 		v["source_path"] = s
 
-		err = processSource(filepath.Join(cfg.BaseDir, s), filepath.Join(cd, d), cfg.LeftDelim, cfg.RightDelim, v, cfg.MultiStageEnabled, true)
+		err = processSource(filepath.Join(cfg.BaseDir, s), filepath.Join(cd, d), cfg.LeftDelim, cfg.RightDelim, v, mse, true)
 		if err != nil {
 			panic(err)
 		}
 	}
 
-	if cfg.MultiStageEnabled {
+	if mse {
 		cdes, err := os.ReadDir(cd)
 		if err != nil {
 			panic(err)
