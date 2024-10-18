@@ -198,11 +198,6 @@ func expandTemplate(templateFilePath, outputFilePath, leftDelim, rightDelim stri
 	if err != nil {
 		return err
 	}
-	of, err := os.OpenFile(outputFilePath, os.O_CREATE|os.O_RDWR, 0666)
-	if err != nil {
-		return err
-	}
-	defer of.Close()
 
 	t := template.New(templateFilePath).Delims(leftDelim, rightDelim)
 	t, err = t.Parse(string(tfd))
@@ -214,6 +209,12 @@ func expandTemplate(templateFilePath, outputFilePath, leftDelim, rightDelim stri
 		return err
 	}
 	if len(buf.String()) > 0 {
+		of, err := os.OpenFile(outputFilePath, os.O_CREATE|os.O_RDWR, 0666)
+		if err != nil {
+			return err
+		}
+		defer of.Close()
+		log.Debug("expandTemplate in: ", templateFilePath, " out: ", outputFilePath, " Size: ", len(buf.String()))
 		_, err = of.Write(buf.Bytes())
 		if err != nil {
 			return err
