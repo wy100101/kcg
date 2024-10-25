@@ -108,6 +108,7 @@ func (c *cluster) Values() map[string]interface{} {
 	vs["region"] = c.Region
 	vs["env"] = c.Env
 	vs["cluster"] = c.Cluster
+	vs["sources"] = c.Sources
 	for k, v := range c.StaticValues {
 		vs[k] = v
 	}
