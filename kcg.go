@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -150,7 +151,10 @@ func (c *cluster) Validate() error {
 func isFile(path string) (bool, error) {
 	i, err := os.Stat(path)
 	if err != nil {
-		return false, err
+		if !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+		return false, nil
 	}
 	return i.Mode().IsRegular(), nil
 }
@@ -161,6 +165,23 @@ func isDir(path string) (bool, error) {
 		return false, err
 	}
 	return i.IsDir(), nil
+}
+
+func pruneEmptyDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	entries, err := d.Readdirnames(-1)
+	d.Close()
+	if err != nil {
+		return err
+	}
+	log.Debug("(pruneEmptyDir) ", dir, " entry count: ", len(entries))
+	if len(entries) == 0 {
+		return os.RemoveAll(dir)
+	}
+	return nil
 }
 
 func cleanDir(dir string) error {
@@ -174,6 +195,7 @@ func cleanDir(dir string) error {
 		return err
 	}
 	for _, entry := range entries {
+		log.Debug("(cleanDir) removing: ", filepath.Join(dir, entry))
 		err = os.RemoveAll(filepath.Join(dir, entry))
 		if err != nil {
 			return err
@@ -215,7 +237,7 @@ func expandTemplate(templateFilePath, outputFilePath, leftDelim, rightDelim stri
 			return err
 		}
 		defer of.Close()
-		log.Debug("expandTemplate in: ", templateFilePath, " out: ", outputFilePath, " Size: ", len(buf.String()))
+		log.Debug("(expandTemplate) in: ", templateFilePath, " out: ", outputFilePath, " Size: ", len(buf.String()))
 		_, err = of.Write(buf.Bytes())
 		if err != nil {
 			return err
@@ -292,6 +314,7 @@ func createKustomizationSourceFile(kustomizeDir, destDir string, dependencies []
 }
 
 func createkustomizationConfigFile(kustomizeBaseDir string, cluster cluster, generateBases bool, resources []string) error {
+	log.Debug("(createkustomizationConfigFile) for dir: ", kustomizeBaseDir)
 	kf := kustomizationConfig{
 		Kind:       "Kustomization",
 		APIVersion: "kustomize.config.k8s.io/v1beta1",
@@ -309,20 +332,29 @@ func createkustomizationConfigFile(kustomizeBaseDir string, cluster cluster, gen
 		if err != nil {
 			return err
 		}
-		kf.Bases = bases
+		if len(bases) > 0 {
+			kf.Bases = bases
+		}
 	}
 	if len(resources) > 0 {
 		kf.Resources = resources
 	}
-	kfy, err := yaml.Marshal(&kf)
-	if err != nil {
-		return err
-	}
-	kfy = []byte(fmt.Sprintf("---\n%s", kfy))
-	kfp := filepath.Join(kustomizeBaseDir, "kustomization.yaml")
-	err = os.WriteFile(kfp, kfy, 0666)
-	if err != nil {
-		return err
+	// only create kustomization.yaml if there are resources or bases
+	if kf.Resources != nil || kf.Bases != nil {
+		log.Debug("(createkustomizationConfigFile) ", kustomizeBaseDir, "kustomization.yaml... writing!")
+		kfy, err := yaml.Marshal(&kf)
+		if err != nil {
+			return err
+		}
+		kfy = []byte(fmt.Sprintf("---\n%s", kfy))
+		kfp := filepath.Join(kustomizeBaseDir, "kustomization.yaml")
+		err = os.WriteFile(kfp, kfy, 0666)
+		if err != nil {
+			return err
+		}
+	} else {
+		log.Debug("(createkustomizationConfigFile) no resources or bases found.")
+		log.Debug("(createkustomizationConfigFile) ", kustomizeBaseDir, "kustomization.yaml... skipping!")
 	}
 	return nil
 }
@@ -340,6 +372,7 @@ func processSource(sourceDir, destDir, leftDelim, rightDelim string, values map[
 			return fmt.Errorf("%s exists but is not a regular file", skfp)
 		}
 		err = os.MkdirAll(destDir, 0777)
+		defer pruneEmptyDir(destDir)
 		if err != nil {
 			return fmt.Errorf("Failed to create directory %s (%s)", destDir, err)
 		}
@@ -395,7 +428,7 @@ func processSource(sourceDir, destDir, leftDelim, rightDelim string, values map[
 }
 
 func processCluster(c cluster, cfg *config, wg *sync.WaitGroup) {
-	log.Debug("Processing cluster:", c.Cluster)
+	log.Debug("(processingCluster):", c.Cluster)
 	defer wg.Done()
 	mse := cfg.MultiStageEnabled
 	if c.MultiStageEnabled != nil {
@@ -418,6 +451,19 @@ func processCluster(c cluster, cfg *config, wg *sync.WaitGroup) {
 		err = processSource(filepath.Join(cfg.BaseDir, s), filepath.Join(cd, d), cfg.LeftDelim, cfg.RightDelim, v, mse, true)
 		if err != nil {
 			panic(err)
+		}
+	}
+	// clean up empty directories
+	cdes, err := os.ReadDir(cd)
+	if err != nil {
+		panic(err)
+	}
+	for _, cde := range cdes {
+		if cde.IsDir() {
+			err = pruneEmptyDir(filepath.Join(cd, cde.Name()))
+			if err != nil {
+				panic(err)
+			}
 		}
 	}
 

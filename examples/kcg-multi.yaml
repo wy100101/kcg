@@ -8,10 +8,12 @@ right_delim: ']]]'
 source_bases:
   shared: &sources_shared
     global: sources/global-multi
+    empty: sources/empty-multi
   shared-cloud-01: &sources_cloud_01
     << : *sources_shared
     external-secrets: sources/external-secrets-multi
     global-simple: sources/global
+    empty-simple: sources/empty
 # var values for clusters that don't override them
 values_bases:
   static_globals: &static_values_global

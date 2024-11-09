@@ -8,6 +8,7 @@ right_delim: ']]]'
 source_bases:
   shared: &sources_shared
     global: sources/global
+    empty: sources/empty
   shared-cloud-01: &sources_cloud_01
     << : *sources_shared
     external-secrets: sources/external-secrets
