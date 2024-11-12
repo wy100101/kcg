@@ -14,6 +14,7 @@ import (
 
 	log "github.com/sirupsen/logrus"
 
+	"github.com/Masterminds/sprig/v3"
 	"github.com/alecthomas/kingpin"
 	"gopkg.in/yaml.v2"
 )
@@ -117,7 +118,7 @@ func (c *cluster) Values() map[string]interface{} {
 	for k, v := range c.DynamicValues {
 		t := template.New(fmt.Sprintf("dynamic_values_%s", k))
 		sb := strings.Builder{}
-		t, err := t.Parse(v)
+		t, err := t.Funcs(sprig.TxtFuncMap()).Parse(v)
 		if err != nil {
 			log.Debug("(c.Values) error parsing dynamic_values: ", err)
 		}
@@ -223,7 +224,7 @@ func expandTemplate(templateFilePath, outputFilePath, leftDelim, rightDelim stri
 	}
 
 	t := template.New(templateFilePath).Delims(leftDelim, rightDelim)
-	t, err = t.Parse(string(tfd))
+	t, err = t.Funcs(sprig.TxtFuncMap()).Parse(string(tfd))
 	if err != nil {
 		return err
 	}
