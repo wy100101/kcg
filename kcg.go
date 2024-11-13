@@ -223,8 +223,7 @@ func expandTemplate(templateFilePath, outputFilePath, leftDelim, rightDelim stri
 		return err
 	}
 
-	t := template.New(templateFilePath).Delims(leftDelim, rightDelim)
-	t, err = t.Funcs(sprig.TxtFuncMap()).Parse(string(tfd))
+	t, err := template.New(templateFilePath).Delims(leftDelim, rightDelim).Funcs(sprig.TxtFuncMap()).Parse(string(tfd))
 	if err != nil {
 		return err
 	}
