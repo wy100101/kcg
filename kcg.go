@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -20,19 +21,20 @@ import (
 )
 
 var (
-	configFile = kingpin.Flag("file.config", "kcg configuration file").Short('f').ExistingFile()
-	debug      = kingpin.Flag("loglevel.debug", "Debug").Short('d').Bool()
+	configFile   = kingpin.Flag("file.config", "kcg configuration file").Short('f').ExistingFile()
+	debug        = kingpin.Flag("loglevel.debug", "Debug").Short('d').Bool()
+	showClusters = kingpin.Flag("show.clusters", "Show clusters and exit").Short('s').Bool()
 )
 
 type config struct {
-	BaseDir           string                            `yaml:"base_dir"`
-	LeftDelim         string                            `yaml:"left_delim"`
-	RightDelim        string                            `yaml:"right_delim"`
-	Clusters          []cluster                         `yaml:"clusters"`
-	MultiStageEnabled bool                              `yaml:"multi_stage_enabled"`
-	DefaultStage      string                            `yaml:"default_stage,omitempty"`
-	SourceBases       map[string]map[string]string      `yaml:"source_bases,omitempty"`
-	ValuesBases       map[string]map[string]interface{} `yaml:"values_bases,omitempty"`
+	BaseDir           string                       `yaml:"base_dir"`
+	LeftDelim         string                       `yaml:"left_delim"`
+	RightDelim        string                       `yaml:"right_delim"`
+	Clusters          []cluster                    `yaml:"clusters"`
+	MultiStageEnabled bool                         `yaml:"multi_stage_enabled"`
+	DefaultStage      string                       `yaml:"default_stage,omitempty"`
+	SourceBases       map[string]map[string]string `yaml:"source_bases,omitempty"`
+	ValuesBases       map[string]map[string]any    `yaml:"values_bases,omitempty"`
 }
 
 func (c *config) Validate() error {
@@ -94,18 +96,18 @@ type kustomizationConfig struct {
 }
 
 type cluster struct {
-	Platform          string                 `yaml:"platform"`
-	Region            string                 `yaml:"region"`
-	Env               string                 `yaml:"env"`
-	Cluster           string                 `yaml:"cluster"`
-	Sources           map[string]string      `yaml:"sources"`
-	StaticValues      map[string]interface{} `yaml:"static_values,omitempty"`
-	DynamicValues     map[string]string      `yaml:"dynamic_values,omitempty"`
-	MultiStageEnabled *bool                  `yaml:"multi_stage_enabled,omitempty"` // use a pointer to allow testing if unset
+	Platform          string            `yaml:"platform"`
+	Region            string            `yaml:"region"`
+	Env               string            `yaml:"env"`
+	Cluster           string            `yaml:"cluster"`
+	Sources           map[string]string `yaml:"sources"`
+	StaticValues      map[string]any    `yaml:"static_values,omitempty"`
+	DynamicValues     map[string]string `yaml:"dynamic_values,omitempty"`
+	MultiStageEnabled *bool             `yaml:"multi_stage_enabled,omitempty"` // use a pointer to allow testing if unset
 }
 
-func (c *cluster) Values() map[string]interface{} {
-	vs := make(map[string]interface{})
+func (c *cluster) Values() map[string]any {
+	vs := make(map[string]any)
 	vs["platform"] = c.Platform
 	vs["region"] = c.Region
 	vs["env"] = c.Env
@@ -131,8 +133,30 @@ func (c *cluster) Values() map[string]interface{} {
 	return vs
 }
 
-func (c *cluster) String() string {
-	return fmt.Sprintf("%s-%s-%s-%s [values] %s", c.Platform, c.Region, c.Env, c.Cluster, c.Values())
+func (c cluster) String() string {
+	//return fmt.Sprintf("%s-%s-%s-%s [values] %v [sources] %v", c.Platform, c.Region, c.Env, c.Cluster, c.Values(), c.Sources)
+	cpp := struct {
+		Platform          string            `yaml:"platform"`
+		Region            string            `yaml:"region"`
+		Env               string            `yaml:"env"`
+		Cluster           string            `yaml:"cluster"`
+		Values            map[string]any    `yaml:"values"`
+		Sources           map[string]string `yaml:"sources"`
+		MultiStageEnabled *bool             `yaml:"multi_stage_enabled,omitempty"`
+	}{
+		Platform:          c.Platform,
+		Region:            c.Region,
+		Env:               c.Env,
+		Cluster:           c.Cluster,
+		Values:            c.Values(),
+		Sources:           c.Sources,
+		MultiStageEnabled: c.MultiStageEnabled,
+	}
+	clusterJSON, err := json.MarshalIndent(cpp, "", "  ")
+	if err != nil {
+		panic(err)
+	}
+	return string(clusterJSON)
 }
 
 func (c *cluster) Validate() error {
@@ -246,6 +270,7 @@ func expandTemplate(templateFilePath, outputFilePath, leftDelim, rightDelim stri
 	return nil
 }
 
+// generateKustomizeBases returns a list of subdirectories that contain kustomization.yaml
 func generateKustomizeBases(dir string) ([]string, error) {
 	bases := []string{}
 	d, err := os.Open(dir)
@@ -277,7 +302,7 @@ func generateKustomizeBases(dir string) ([]string, error) {
 	return bases, nil
 }
 
-func createKustomizationSourceFile(kustomizeDir, destDir string, dependencies []dependsOn) error {
+func createFluxKustomizationSourceFile(kustomizeDir, destDir string, dependencies []dependsOn, prune, force bool) error {
 	stage := filepath.Base(kustomizeDir)
 	ks := kustomizationSource{
 		Kind:       "Kustomization",
@@ -289,8 +314,8 @@ func createKustomizationSourceFile(kustomizeDir, destDir string, dependencies []
 		Spec: kustomizationSpec{
 			Interval: "1m",
 			Path:     fmt.Sprintf("./%s", kustomizeDir),
-			Prune:    true,
-			Force:    false,
+			Prune:    prune,
+			Force:    force,
 			SourceRef: sourceRef{
 				Kind: "GitRepository",
 				Name: "flux-system",
@@ -313,7 +338,7 @@ func createKustomizationSourceFile(kustomizeDir, destDir string, dependencies []
 	return nil
 }
 
-func createkustomizationConfigFile(kustomizeBaseDir string, cluster cluster, generateBases bool, resources []string) error {
+func createKustomizationConfigFile(kustomizeBaseDir string, cluster cluster, generateBases bool, resources []string) error {
 	log.Debug("(createkustomizationConfigFile) for dir: ", kustomizeBaseDir)
 	kf := kustomizationConfig{
 		Kind:       "Kustomization",
@@ -341,7 +366,7 @@ func createkustomizationConfigFile(kustomizeBaseDir string, cluster cluster, gen
 	}
 	// only create kustomization.yaml if there are resources or bases
 	if kf.Resources != nil || kf.Bases != nil {
-		log.Debug("(createkustomizationConfigFile) ", kustomizeBaseDir, "kustomization.yaml... writing!")
+		log.Debug("(createKustomizationConfigFile) ", kustomizeBaseDir, "kustomization.yaml... writing!")
 		kfy, err := yaml.Marshal(&kf)
 		if err != nil {
 			return err
@@ -353,8 +378,8 @@ func createkustomizationConfigFile(kustomizeBaseDir string, cluster cluster, gen
 			return err
 		}
 	} else {
-		log.Debug("(createkustomizationConfigFile) no resources or bases found.")
-		log.Debug("(createkustomizationConfigFile) ", kustomizeBaseDir, "kustomization.yaml... skipping!")
+		log.Debug("(createKustomizationConfigFile) no resources or bases found.")
+		log.Debug("(createKustomizationConfigFile) ", kustomizeBaseDir, "kustomization.yaml... skipping!")
 	}
 	return nil
 }
@@ -397,14 +422,15 @@ func processSource(sourceDir, destDir, leftDelim, rightDelim string, values map[
 		if se.IsDir() {
 			if topLevel && multiStageEnabled {
 				// if top level and the directory is a number update the destination for multistage
-				matched, err := regexp.MatchString(`^\d\d$`, se.Name())
+				matched, err := regexp.MatchString(`^(\d\d|crds)$`, se.Name())
 				if err != nil {
 					return err
 				}
-				// if the source entry is a number, then use the
+				// if the source entry is a directory that is either 2 digit number or crds treat it as the stage in multistage
 				if matched {
 					sd = se.Name()
 				}
+				// update destination dir to be /cluster-dir/([00-99]|crds)/source from /cluster-dir/source
 				mdd = filepath.Join(ddd, sd, ddb)
 			}
 			// if source entry is a directory call processSource on it
@@ -482,7 +508,17 @@ func processCluster(c cluster, cfg *config, wg *sync.WaitGroup) {
 				}
 				if matched {
 					stages = append(stages, cde.Name())
-					err = createkustomizationConfigFile(filepath.Join(cd, cde.Name()), c, true, nil)
+					err = createKustomizationConfigFile(filepath.Join(cd, cde.Name()), c, true, nil)
+					if err != nil {
+						panic(err)
+					}
+				} else if cde.Name() == "crds" {
+					stages = append(stages, cde.Name())
+					err = createKustomizationConfigFile(filepath.Join(cd, cde.Name()), c, true, nil)
+					if err != nil {
+						panic(err)
+					}
+					err = createFluxKustomizationSourceFile(filepath.Join(cd, cde.Name()), cd, nil, false, false)
 					if err != nil {
 						panic(err)
 					}
@@ -493,14 +529,14 @@ func processCluster(c cluster, cfg *config, wg *sync.WaitGroup) {
 		ds := ""
 		sksfs := []string{}
 		for _, s := range stages {
-			err = createkustomizationConfigFile(filepath.Join(cd, s), c, true, nil)
+			err = createKustomizationConfigFile(filepath.Join(cd, s), c, true, nil)
 			if err != nil {
 				panic(err)
 			}
 			if len(ds) > 0 {
-				err = createKustomizationSourceFile(filepath.Join(cd, s), cd, []dependsOn{{Name: ds}})
+				err = createFluxKustomizationSourceFile(filepath.Join(cd, s), cd, []dependsOn{{Name: ds}}, true, false)
 			} else {
-				err = createKustomizationSourceFile(filepath.Join(cd, s), cd, nil)
+				err = createFluxKustomizationSourceFile(filepath.Join(cd, s), cd, nil, true, false)
 			}
 			if err != nil {
 				panic(err)
@@ -509,12 +545,12 @@ func processCluster(c cluster, cfg *config, wg *sync.WaitGroup) {
 			ds = filepath.Join(cd, s)
 			ds = s // next ks should depend on this one
 		}
-		err = createkustomizationConfigFile(cd, c, false, sksfs)
+		err = createKustomizationConfigFile(cd, c, false, sksfs)
 		if err != nil {
 			panic(err)
 		}
 	} else {
-		err = createkustomizationConfigFile(cd, c, true, nil)
+		err = createKustomizationConfigFile(cd, c, true, nil)
 		if err != nil {
 			panic(err)
 		}
@@ -538,6 +574,12 @@ func main() {
 	err = cfg.Validate()
 	if err != nil {
 		log.Panic(err)
+	}
+	if *showClusters {
+		for _, c := range cfg.Clusters {
+			fmt.Printf("%v\n", c)
+		}
+		os.Exit(0)
 	}
 
 	var wg sync.WaitGroup
