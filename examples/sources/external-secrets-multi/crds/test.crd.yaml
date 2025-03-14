@@ -1,0 +1,9 @@
+kind: crd
+apiVersion: v1
+metadata:
+  name: test.crd
+spec:
+  names:
+    plural: tests
+    singular: test
+    kind: Test

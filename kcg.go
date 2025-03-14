@@ -302,6 +302,7 @@ func generateKustomizeBases(dir string) ([]string, error) {
 }
 
 func createFluxKustomizationSourceFile(kustomizeDir, destDir string, dependencies []dependsOn, prune, force bool) error {
+	log.Debug("(createFluxKustomizationSourceFile) for dir: ", kustomizeDir, " destDir: ", destDir, " prune: ", prune, " force: ", force)
 	stage := filepath.Base(kustomizeDir)
 	ks := kustomizationSource{
 		Kind:       "Kustomization",
@@ -499,6 +500,7 @@ func processCluster(c cluster, cfg *config, wg *sync.WaitGroup) {
 		}
 		// create kustomization.yaml for each directory and corresponding ks
 		stages := []string{}
+		sksfs := []string{}
 		for _, cde := range cdes {
 			if cde.IsDir() {
 				matched, err := regexp.MatchString(`^\d\d$`, cde.Name())
@@ -512,7 +514,7 @@ func processCluster(c cluster, cfg *config, wg *sync.WaitGroup) {
 						panic(err)
 					}
 				} else if cde.Name() == "crds" {
-					stages = append(stages, cde.Name())
+					sksfs = append(sksfs, fmt.Sprintf("%s.ks.yaml", cde.Name()))
 					err = createKustomizationConfigFile(filepath.Join(cd, cde.Name()), c, true, nil)
 					if err != nil {
 						panic(err)
@@ -526,7 +528,6 @@ func processCluster(c cluster, cfg *config, wg *sync.WaitGroup) {
 		}
 		sort.Strings(stages)
 		ds := ""
-		sksfs := []string{}
 		for _, s := range stages {
 			err = createKustomizationConfigFile(filepath.Join(cd, s), c, true, nil)
 			if err != nil {
