@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -152,11 +151,11 @@ func (c cluster) String() string {
 		Sources:           c.Sources,
 		MultiStageEnabled: c.MultiStageEnabled,
 	}
-	clusterJSON, err := json.MarshalIndent(cpp, "", "  ")
+	clusterYAML, err := yaml.Marshal(cpp)
 	if err != nil {
 		panic(err)
 	}
-	return string(clusterJSON)
+	return string(clusterYAML)
 }
 
 func (c *cluster) Validate() error {
@@ -577,6 +576,8 @@ func main() {
 	}
 	if *showClusters {
 		for _, c := range cfg.Clusters {
+			fmt.Printf("---\n")
+			fmt.Printf("### %s-%s-%s-%s ###\n", c.Platform, c.Region, c.Env, c.Cluster)
 			fmt.Printf("%v\n", c)
 		}
 		os.Exit(0)
