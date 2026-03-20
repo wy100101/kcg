@@ -99,7 +99,7 @@ type cluster struct {
 	Region            string            `yaml:"region"`
 	Env               string            `yaml:"env"`
 	Cluster           string            `yaml:"cluster"`
-	sources           map[string]any    `yaml:"sources"`
+	RawSources        map[string]any    `yaml:"sources"`
 	StaticValues      map[string]any    `yaml:"static_values,omitempty"`
 	DynamicValues     map[string]string `yaml:"dynamic_values,omitempty"`
 	MultiStageEnabled *bool             `yaml:"multi_stage_enabled,omitempty"` // use a pointer to allow testing if unset
@@ -107,7 +107,8 @@ type cluster struct {
 
 func (c *cluster) Sources() map[string]string {
 	s := make(map[string]string)
-	for k, v := range c.sources {
+	for k, v := range c.RawSources {
+		log.Debug(k, ": ", v)
 		if v != nil {
 			s[k] = fmt.Sprint(v)
 		}
