@@ -121,7 +121,7 @@ func (c *cluster) Values() map[string]any {
 	vs["region"] = c.Region
 	vs["env"] = c.Env
 	vs["cluster"] = c.Cluster
-	vs["sources"] = c.Sources
+	vs["sources"] = c.Sources()
 	for k, v := range c.StaticValues {
 		vs[k] = v
 	}
@@ -158,7 +158,7 @@ func (c cluster) String() string {
 		Env:               c.Env,
 		Cluster:           c.Cluster,
 		Values:            c.Values(),
-		Sources:           c.Sources,
+		Sources:           c.Sources(),
 		MultiStageEnabled: c.MultiStageEnabled,
 	}
 	clusterYAML, err := yaml.Marshal(cpp)
@@ -480,7 +480,7 @@ func processCluster(c cluster, cfg *config, wg *sync.WaitGroup) {
 	}
 	cleanDir(cd)
 
-	for d, s := range c.Sources {
+	for d, s := range c.Sources() {
 		v["source_key"] = d
 		v["source_path"] = s
 
@@ -601,7 +601,7 @@ func main() {
 		if *debug {
 			log.Debug("Processing cluster: ", c.String())
 			log.Debug("Sources:")
-			for k, v := range c.Sources {
+			for k, v := range c.Sources() {
 				log.Debug("* ", k, ": ", v)
 			}
 			log.Debug("Values:")
