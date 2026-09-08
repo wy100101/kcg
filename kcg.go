@@ -324,7 +324,7 @@ func createFluxKustomizationSourceFile(kustomizeDir, destDir string, dependencie
 		},
 		Spec: kustomizationSpec{
 			Interval: "1m",
-			Path:     fmt.Sprintf("./%s", kustomizeDir),
+			Path:     fmt.Sprintf("./%s", filepath.ToSlash(kustomizeDir)),
 			Prune:    prune,
 			Force:    force,
 			SourceRef: sourceRef{
